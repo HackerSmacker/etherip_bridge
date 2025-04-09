@@ -1,0 +1,55 @@
+Simple DECnet/LAT EtherIP/GRE shim, based on the HECnet DECnet/LAT <--> UDP bridge program
+--> WARNING: This program only works on Mac OS X, FreeBSD, NetBSD, OpenBSD, and Linux. */
+
+1. What is this?
+This is a program that listens on an Ethernet device in promiscious mode, checks inbound packets for the DECnet Phase IV, LAT, or both EtherType
+numbers, and sends that data to a remote host using the EtherIP or GRE protocol. This, of course, also works in reverse!
+
+2. What is EtherIP?
+EtherIP is IP over Ethernet, with a minimal header. The protocol number is 97, and its header length is 2 bytes. The encapsulation is as follows:
+[Ethernet II header, ethertype = IP]
+[IPv4 header, protocol = 97]
+[EtherIP header, header contents = X'3000']
+[Ethernet II header, ethertype = DECnet or LAT]
+[DECnet or LAT header]
+
+3. How do I run it?
+Edit the bridge.conf, and set the "local" line to reflect the name of the Ethernet controller you wish to transceive on. Set the remotes to be
+named whatever you want, but be sure you specify the remote IP in the form of IP:proto, where proto is 97 for EtherIP (but you can enter 
+whatever you want here for fun). 
+
+4. What's the point?
+EtherIP is a standard protocol that a variety of systems support, and this program is perfectly interoperable with FreeBSD EtherIP (gif tunnels
+attached to a bridge, look it up if you don't believe me) and other EtherIP implementations that exist today.
+
+5. Gimme some example config files!
+This config does DECnet and LAT in between a bridge device on OS X/BSD and an EtherIP gateway:
+local bridge100
+decnetgw1 192.168.1.145:97
+
+[decnet]
+local
+decnetgw1
+
+[lat]
+local
+decnetgw1
+<end>
+
+Here's one that does DECnet and LAT differently:
+local bridge100
+decnetgw1 192.168.1.145:97
+latgw1 192.168.1.146:97
+
+[decnet]
+local
+decnetgw1
+
+[lat]
+local
+latgw1
+<end>
+This should be enough documentation!
+
+6. What else can this do?
+This program can be modified to speak IPX over Ethernet II but also IPX over Ethernet RAW! 

@@ -1,0 +1,31 @@
+This is the bridge program, version 2.2
+
+A few notes:
+DPORT is the default port to use locally for UDP. It can be
+defined at compile time, with something like -dDPORT=4711 if
+wanted.
+
+The makefile will not define the port, so it defaults to not having
+a default value.
+
+The bridge program now understands two switches:
+-p <port>
+-d <directory>
+
+It also understands the old syntax. If you mix, the port number should
+be last on the line.
+
+The directory is the location where the config file is expected. If
+not specified, the config file is (still) searched in the current
+directory.
+
+The original version can always be found at:
+http://www.update.uu.se/~bqt/bridge.tar
+
+It should compile on *BSD, Linux as well as Mac OSX. Other systems
+might also work. Please report any success, or problems to:
+
+bqt@update.uu.se
+
+Also consider joining the hecnet mailing list, if you are interested
+in hobbyist DECnet.
