@@ -26,11 +26,8 @@
 
 #define DPORT 97 /* Protocol number for EtherIP */
 #define GPORT 47 /* Protocol number for GRE */
-
 #define NOBPF 1 /* Reduce userland processing load by using a BPF program */
-
 #define MAX_HOST 32
-
 #define CONF_FILE "bridge.conf"
 
 #include <netinet/in.h>
@@ -95,26 +92,34 @@ static int packetoffset = 22;   /* Packet offset, 22 for raw mode and 2 for UDP 
  *    RAW Type: differentiates LLC, SNAP, and IPX 802.3
  *    SNAP Type: if the RAW (LLC) type is 0xAAAA, find the SNAP
  */
-#define ETHERTYPE_DECnet 0x6003
-#define ETHERTYPE_LAT 0x6004
-#define ETHERTYPE_IPXII 0x8137
-#define ETHERTYPE_IP 0x0800
-#define ETHERTYPE_ARP 0x0806
-#define ETHERTYPE_IP6 0x86DD
-#define ETHERTYPE_APOLLO 0x8019
-#define ETHERTYPE_XNS 0x0600
-#define ETHERTYPE_MOPDL 0x6001
-#define ETHERTYPE_MOPRC 0x6002
-#define ETHERTYPE_LOOPBACK 0x9000
-#define RAWTYPE_IPXRAW 0xFFFF
-#define RAWTYPE_SNAP 0xAAAA
-#define RAWTYPE_OSI 0xFEFE
-#define RAWTYPE_SNA 0x0404
-#define RAWTYPE_SNATEST 0x0405
-#define RAWTYPE_NETBIOS 0xF0F0
-#define SNAPTYPE_ATALK 0x809B
+#define ETHERTYPE_DECnet 0x6003     /* DECnet Phase IV, II */
+#define ETHERTYPE_LAT 0x6004        /* Local Area Transport, II */
+#define ETHERTYPE_IPXII 0x8137      /* IPX in Ethernet II */
+#define ETHERTYPE_IP 0x0800         /* Regular ARPA TCP/IP, II */
+#define ETHERTYPE_ARP 0x0806        /* ARP, II */
+#define ETHERTYPE_IP6 0x86DD        /* IPv6, II */
+#define ETHERTYPE_APOLLO 0x8019     /* Apollo Domain, II */
+#define ETHERTYPE_XNS 0x0600        /* Xerox NS, II (the lowest real EtherType number!) */
+#define ETHERTYPE_MOPDL 0x6001      /* MOP dump/load function, II */
+#define ETHERTYPE_MOPRC 0x6002      /* MOP remote console function, II */
+#define ETHERTYPE_LOOPBACK 0x9000   /* LOOP protocol, II */
+#define ETHERTYPE_AX25 0x08FF       /* AX.25 in Ethernet (BPQETHER), II */
+#define ETHERTYPE_PPP 0x8864        /* PPP over Ethernet, II */
+#define ETHERTYPE_ATALK 0x809B      /* AppleTalk, II (does this really exist?) */
+#define ETHERTYPE_MPLS 0x8847       /* MultiProtocol Label Switching */
+#define RAWTYPE_IPXRAW 0xFFFF       /* IPX "raw". 802.3 */
+#define RAWTYPE_SNAP 0xAAAA         /* marker for SNAP, 802.3 */
+#define RAWTYPE_OSI 0xFEFE          /* ISO/OSI/CLNS/CLNP, 802.3 */
+#define RAWTYPE_SNA 0x0404          /* SNA over LLC main functions, 802.3 */
+#define RAWTYPE_SNATEST 0x0405      /* SNA over LLC setup and teardown, 802.3 */
+#define RAWTYPE_NETBIOS 0xF0F0      /* NetBIOS over LLC (NetBEUI), 802.3 */
+#define RAWTYPE_IP 0x0606           /* DoD IP encapsulation, very rare, 802.3 */
+#define SNAPTYPE_ATALK 0x809B       /* AppleTalk, SNAP */
+#define SNAPTYPE_CDP 0x2000         /* Cisco Discovery Protocol, SNAP */
+#define SNAPTYPE_IP 0x0800          /* IP, SNAP (pretty rare) */
+#define SNAPTYPE_IPX 0x8137         /* IP, SNAP (pretty rare) */
 
-/* xcode (Swift) has MAX (poorly documented), so conditionally define.
+/* OS X has MAX (poorly documented), so conditionally define.
  */
 
 #ifndef MAX
@@ -123,7 +128,7 @@ static int packetoffset = 22;   /* Packet offset, 22 for raw mode and 2 for UDP 
 
 /* This is a very simple and small program for bpf that just
      filters out anything by any protocol that we *know* we're
-     not interested in.
+     not interested in. Note that this is only good for EII.
  */
 
 struct bpf_insn insns[] = {
@@ -165,6 +170,10 @@ struct bpf_insn insns[] = {
 /* All the possible packet types: */
 typedef enum {
     Unknown,
+    PPP,
+    CDP,
+    AX25,
+    MPLS,
     XNS,
     SNA,
     OSI,
@@ -174,8 +183,7 @@ typedef enum {
     IP6,
     NETBIOS,
     ATALK,
-    IPXRAW,
-    IPXII,
+    IPX,
     DECnet,
     LAT,
     MAXTYP
@@ -396,6 +404,15 @@ int add_service(char *newbridge, pkttyp type, char *name) {
 /* read_conf
    Read the config file
 */
+#define CONFIG_ENTRY(proto, modenum) \
+    if (strcmp(buf, "[" #proto "]") == 0) mode = modenum;
+
+#define BRIDGE_ADD(index, servname) \
+    case index: \
+        if (!add_service(buf, servname, #servname)) \
+            printf("%d: " #servname "bridge %s don't exist.\n", line, buf); \
+        break;
+
 void read_conf(int x) {
     FILE *f;
     int mode = 0;
@@ -435,34 +452,23 @@ void read_conf(int x) {
         if ((strlen(buf) > 2) && (buf[0] != '!')) {
             if (buf[0] == '[') {
                 mode = -1;
-                if (strcmp(buf, "[bridge]") == 0)
-                    mode = 0;
-                if (strcmp(buf, "[decnet]") == 0)
-                    mode = 1;
-                if (strcmp(buf, "[lat]") == 0)
-                    mode = 2;
-                if (strcmp(buf, "[ipxii]") == 0)
-                    mode = 3;
-                if (strcmp(buf, "[ipxraw]") == 0)
-                    mode = 4;
-                if (strcmp(buf, "[atalk]") == 0)
-                    mode = 5;
-                if (strcmp(buf, "[netbios]") == 0)
-                    mode = 6;
-                if (strcmp(buf, "[ip]") == 0)
-                    mode = 7;
-                if (strcmp(buf, "[ip6]") == 0)
-                    mode = 8;
-                if (strcmp(buf, "[arp]") == 0)
-                    mode = 9;
-                if (strcmp(buf, "[apollo]") == 0)
-                    mode = 10;
-                if (strcmp(buf, "[xns]") == 0)
-                    mode = 11;
-                if (strcmp(buf, "[sna]") == 0)
-                    mode = 12;
-                if (strcmp(buf, "[osi]") == 0)
-                    mode = 13;
+                CONFIG_ENTRY(bridge, 0);
+                CONFIG_ENTRY(decnet, 1);
+                CONFIG_ENTRY(lat, 2);
+                CONFIG_ENTRY(ipx, 3);
+                CONFIG_ENTRY(atalk, 4);
+                CONFIG_ENTRY(netbios, 5);
+                CONFIG_ENTRY(ip, 6);
+                CONFIG_ENTRY(ip6, 7);
+                CONFIG_ENTRY(arp, 8);
+                CONFIG_ENTRY(apollo, 9);
+                CONFIG_ENTRY(xns, 10);
+                CONFIG_ENTRY(sna, 11);
+                CONFIG_ENTRY(osi, 12);
+                CONFIG_ENTRY(ppp, 13);
+                CONFIG_ENTRY(mpls, 14);
+                CONFIG_ENTRY(cdp, 15);
+                CONFIG_ENTRY(ax25, 16);
 #if 0
                 if(sscanf(buf,"[source %d.%d]", &area, &node) == 2) mode = 3;
                 if(strcmp(buf,"[relay]") == 0) mode = 4;
@@ -481,58 +487,22 @@ void read_conf(int x) {
                         exit(1);
                     }
                     break;
-                case 1:
-                    if (!add_service(buf, DECnet, "DECnet"))
-                        printf("%d: DECnet bridge %s don't exist.\n", line, buf);
-                    break;
-                case 2:
-                    if (!add_service(buf, LAT, "LAT"))
-                        printf("%d: LAT bridge %s don't exist.\n", line, buf);
-                    break;
-                case 3:
-                    if (!add_service(buf, IPXII, "IPXII"))
-                        printf("%d: IPXII bridge %s don't exist.\n", line, buf);
-                    break;
-                case 4:
-                    if (!add_service(buf, IPXRAW, "IPXRAW"))
-                        printf("%d: IPXRAW bridge %s don't exist.\n", line, buf);
-                    break;
-                case 5:
-                    if (!add_service(buf, ATALK, "ATALK"))
-                        printf("%d: AppleTalk bridge %s don't exist.\n", line, buf);
-                    break;
-                case 6:
-                    if (!add_service(buf, NETBIOS, "NETBIOS"))
-                        printf("%d: LLC NetBIOS bridge %s don't exist.\n", line, buf);
-                    break;
-                case 7:
-                    if (!add_service(buf, IP, "IP"))
-                        printf("%d: IP bridge %s don't exist.\n", line, buf);
-                    break;
-                case 8:
-                    if (!add_service(buf, IP6, "IP6"))
-                        printf("%d: IPv6 bridge %s don't exist.\n", line, buf);
-                    break;
-                case 9:
-                    if (!add_service(buf, ARP, "ARP"))
-                        printf("%d: ARP bridge %s don't exist.\n", line, buf);
-                    break;
-                case 10:
-                    if (!add_service(buf, APOLLO, "APOLLO"))
-                        printf("%d: Apollo bridge %s don't exist.\n", line, buf);
-                    break;
-                case 11:
-                    if (!add_service(buf, XNS, "XNS"))
-                        printf("%d: XNS bridge %s don't exist.\n", line, buf);
-                    break;
-                case 12:
-                    if (!add_service(buf, OSI, "OSI"))
-                        printf("%d: ISO/OSI bridge %s don't exist.\n", line, buf);
-                    break;
-                case 13:
-                    if (!add_service(buf, SNA, "SNA"))
-                        printf("%d: SNA bridge %s don't exist.\n", line, buf);
-                    break;
+                BRIDGE_ADD(1, DECnet);
+                BRIDGE_ADD(2, LAT);
+                BRIDGE_ADD(3, IPX);
+                BRIDGE_ADD(4, ATALK);
+                BRIDGE_ADD(5, NETBIOS);
+                BRIDGE_ADD(6, IP);
+                BRIDGE_ADD(7, IP6);
+                BRIDGE_ADD(8, ARP);
+                BRIDGE_ADD(9, APOLLO);
+                BRIDGE_ADD(10, XNS);
+                BRIDGE_ADD(11, SNA);
+                BRIDGE_ADD(12, OSI);
+                BRIDGE_ADD(13, PPP);
+                BRIDGE_ADD(14, MPLS);
+                BRIDGE_ADD(15, CDP);
+                BRIDGE_ADD(16, AX25);
                 default:
                     printf("weird state at line %d\n", line);
                     exit(1);
@@ -583,28 +553,43 @@ int is_rawtype(struct DATA *d, unsigned short type) {
 
 /* ------------- Protocol identifiers ---------------- */
 
-int is_ipxii(struct DATA *data) { return is_ethertype(data, ETHERTYPE_IPXII); }
-int is_ip(struct DATA *data) { return is_ethertype(data, ETHERTYPE_IP); }
-int is_ip6(struct DATA *data) { return is_ethertype(data, ETHERTYPE_IP6); }
-int is_arp(struct DATA *data) { return is_ethertype(data, ETHERTYPE_ARP); }
-int is_apollo(struct DATA *data) { return is_ethertype(data, ETHERTYPE_APOLLO); }
-int is_ipxraw(struct DATA *data) { return is_rawtype(data, RAWTYPE_IPXRAW); }
-int is_netbios(struct DATA *data) { return is_rawtype(data, RAWTYPE_NETBIOS); }
-int is_atalk(struct DATA *data) {
-    if (is_rawtype(data, RAWTYPE_SNAP))
-        return is_snaptype(data, SNAPTYPE_ATALK);
-    return 0;
+#define PROTO_MATCH(name, matchtype, protonum) \
+    int is_##name(struct DATA* data) { return is_##matchtype(data, protonum); }
+
+#define PROTO_MATCH_MANY(name) \
+    int is_##name(struct DATA* data)
+
+PROTO_MATCH(ip6, ethertype, ETHERTYPE_IP6);
+PROTO_MATCH(arp, ethertype, ETHERTYPE_ARP);
+PROTO_MATCH(apollo, ethertype, ETHERTYPE_APOLLO);
+PROTO_MATCH(xns, ethertype, ETHERTYPE_XNS);
+PROTO_MATCH(ax25, ethertype, ETHERTYPE_AX25);
+PROTO_MATCH(ppp, ethertype, ETHERTYPE_PPP);
+PROTO_MATCH(cdp, snaptype, SNAPTYPE_CDP);
+PROTO_MATCH(mpls, ethertype, ETHERTYPE_MPLS);
+PROTO_MATCH(decnet, ethertype, ETHERTYPE_DECnet);
+PROTO_MATCH(netbios, rawtype, RAWTYPE_NETBIOS);
+PROTO_MATCH(osi, rawtype, RAWTYPE_OSI);
+PROTO_MATCH_MANY(atalk) {
+    return ((is_rawtype(data, RAWTYPE_SNAP) && is_snaptype(data, SNAPTYPE_ATALK)) ||
+             is_ethertype(data, ETHERTYPE_ATALK));
 }
-int is_decnet(struct DATA *data) { return is_ethertype(data, ETHERTYPE_DECnet); }
-int is_osi(struct DATA *data) { return is_rawtype(data, RAWTYPE_OSI); }
-int is_sna(struct DATA *data) {
+PROTO_MATCH_MANY(sna) {
     return (is_rawtype(data, RAWTYPE_SNA) || is_rawtype(data, RAWTYPE_SNATEST));
 }
-int is_lat(struct DATA *data) {
+PROTO_MATCH_MANY(ip) {
+    return (is_rawtype(data, RAWTYPE_IP) || is_ethertype(data, ETHERTYPE_IP));
+}
+PROTO_MATCH_MANY(lat) {
     return (is_ethertype(data, ETHERTYPE_LAT) ||
-                    is_ethertype(data, ETHERTYPE_MOPDL) ||
-                    is_ethertype(data, ETHERTYPE_MOPRC) ||
-                    is_ethertype(data, ETHERTYPE_LOOPBACK));
+            is_ethertype(data, ETHERTYPE_MOPDL) ||
+            is_ethertype(data, ETHERTYPE_MOPRC) ||
+            is_ethertype(data, ETHERTYPE_LOOPBACK));
+}
+PROTO_MATCH_MANY(ipx) {
+    return (is_ethertype(data, ETHERTYPE_IPXII) ||
+            is_rawtype(data, RAWTYPE_IPXRAW) ||
+            is_snaptype(data, SNAPTYPE_IPX));
 }
 
 /* timedelta
@@ -757,17 +742,24 @@ int locate_dest(struct DATA *d) {
 /* 
  * Figure out what type a packet is.
  */
+#define CLASSIFY(name, proto) \
+    if(is_##name(d)) return proto
+
 pkttyp classify_packet(struct DATA *d) {
-    if (is_ip(d)) return IP;
-    if (is_ip6(d)) return IP6;
-    if (is_atalk(d)) return ATALK;
-    if (is_arp(d)) return ARP;
-    if (is_apollo(d)) return APOLLO;
-    if (is_netbios(d)) return NETBIOS;
-    if (is_ipxii(d)) return IPXII;
-    if (is_ipxraw(d)) return IPXRAW;
-    if (is_decnet(d)) return DECnet;
-    if (is_lat(d)) return LAT;
+    CLASSIFY(ip, IP);
+    CLASSIFY(ip6, IP6);
+    CLASSIFY(ipx, IPX);
+    CLASSIFY(arp, ARP);
+    CLASSIFY(apollo, APOLLO);
+    CLASSIFY(xns, XNS);
+    CLASSIFY(netbios, NETBIOS);
+    CLASSIFY(lat, LAT);
+    CLASSIFY(decnet, DECnet);
+    CLASSIFY(osi, OSI);
+    CLASSIFY(sna, SNA);
+    CLASSIFY(cdp, CDP);
+    CLASSIFY(mpls, MPLS);
+    CLASSIFY(ax25, AX25);
     return Unknown;
 }
 

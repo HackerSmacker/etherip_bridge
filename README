@@ -65,18 +65,22 @@ number.
 
 6. What else can this do?
 The following protocol types, specified in the [brackets] in the config file, are supported:
-- ip = IPv4
+- ip = IPv4 Ethernet II/LLC/SNAP
 - ip6 = IPv6
 - lat = DEC LAT and MOP
 - decnet = DECnet Phase IV
 - atalk = AppleTalk SNAP
 - netbios = LLC NetBIOS
-- ipxii = IPX, Ethernet II encap
-- ipxraw = IPX, IEEE 802.3 (original IPX)
+- ipx = IPX, all frame formats (EII, 802.2, 802.3, SNAP)
 - apollo = Apollo Domain protocol
 - xns = Xerox NS
 - osi = ISO/OSI Network Layer (includes ISIS)
 - sna = IBM SNA
+- arp = ARP (Ethernet II only)
+- ax25 = AX.25 over Ethernet (BPQETHER)
+- cdp = Cisco Discovery Protocol
+- mpls = Multi-Protocol Label Switching
+- ppp = PPPoE
 
 7. Can this program encapsulate stuff in UDP?
 Yes, it can. If you set the protocol number to ANYTHING but 97, that number will be reused for a UDP port number. 
