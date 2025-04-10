@@ -1,6 +1,9 @@
-/* A simple DECnet bridge program
+/* A simple DECnet bridge program, adapted into a protocol-limited
+ * EtherIP bridge.
  * (c) 2003, 2005, 2020 by Johnny Billquist
+ * (c) 2023, 2024, 2025 HackerSmacker
  *
+ * Version 3.0 Switch whole thing over to EtherIP and add protocols.
  * Version 2.5 Change code to make use of more modern pcap interface.
  * Version 2.4 T. DeBellis, minor fixes to keep Xcode on Mac OSX from
  *             complaining, also complaints from gcc 8.3.  Parse for
@@ -22,9 +25,10 @@
 #define DEBUG 0
 */
 
-#ifndef DPORT
-#define DPORT 97 /* Allow option to override */
-#endif
+#define DPORT 97 /* Protocol number for EtherIP */
+#define GPORT 47 /* Protocol number for GRE */
+
+#define NOBPF 1
 
 #define MAX_HOST 32
 
@@ -59,6 +63,8 @@ static int VeryVerbose = 1; /* Lots of stuff! */
 static int Verbose = 0;     /* Then always typing */
 static int VeryVerbose = 0; /* Lots of stuff! */
 #endif
+static int packetoffset =
+    22; /* Packet offset, 22 for raw mode and 2 for UDP mode */
 
 /* Throttling control:
  * THROTTLETIME - (mS)
@@ -84,13 +90,31 @@ static int VeryVerbose = 0; /* Lots of stuff! */
 
 #define THROTTLEMASK ((1 << THROTTLEPKT) - 1)
 
+/*
+ * Define the protocol numbers.
+ * Choices:
+ *  EtherType: used in lieu of the length word
+ *  RAW Type: differentiates LLC, SNAP, and IPX 802.3
+ *  SNAP Type: if the RAW (LLC) type is 0xAAAA, find the SNAP
+ */
 #define ETHERTYPE_DECnet 0x6003
 #define ETHERTYPE_LAT 0x6004
 #define ETHERTYPE_IPXII 0x8137
-#define ETHERTYPE_IPXRAW 0x8137
+#define ETHERTYPE_IP 0x0800
+#define ETHERTYPE_ARP 0x0806
+#define ETHERTYPE_IP6 0x86DD
+#define ETHERTYPE_APOLLO 0x8019
+#define ETHERTYPE_XNS 0x0600
 #define ETHERTYPE_MOPDL 0x6001
 #define ETHERTYPE_MOPRC 0x6002
 #define ETHERTYPE_LOOPBACK 0x9000
+#define RAWTYPE_IPXRAW 0xFFFF
+#define RAWTYPE_SNAP 0xAAAA
+#define RAWTYPE_OSI 0xFEFE
+#define RAWTYPE_SNA 0x0404
+#define RAWTYPE_SNATEST 0x0405
+#define RAWTYPE_NETBIOS 0xF0F0
+#define SNAPTYPE_ATALK 0x809B
 
 /* xcode (Swift) has MAX (poorly documented), so conditionally define.
  */
@@ -106,7 +130,6 @@ static int VeryVerbose = 0; /* Lots of stuff! */
 
 struct bpf_insn insns[] = {
     BPF_STMT(BPF_LD + BPF_H + BPF_ABS, 12),
-    BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_IPXRAW, 7, 0),
     BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_IPXII, 6, 0),
     BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_LOOPBACK, 5, 0),
     BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, ETHERTYPE_MOPRC, 4, 0),
@@ -136,7 +159,23 @@ struct bpf_insn insns[] = {
 #define HDRLEN 14 /* Length of the ethernet header */
 #define MAXMEM 8  /* Number of old packets we "remember" */
 
-typedef enum { Unknown, IPXRAW, IPXII, DECnet, LAT, MAXTYP } pkttyp;
+typedef enum {
+  Unknown,
+  XNS,
+  SNA,
+  OSI,
+  APOLLO,
+  ARP,
+  IP,
+  IP6,
+  NETBIOS,
+  ATALK,
+  IPXRAW,
+  IPXII,
+  DECnet,
+  LAT,
+  MAXTYP
+} pkttyp;
 
 struct BRIDGE {
   char name[40];
@@ -192,8 +231,7 @@ int lookup(struct sockaddr_in *sa) {
   int i;
 
   for (i = 0; i < bcnt; i++) {
-    if ((bridge[i].addr.s_addr == sa->sin_addr.s_addr)
-        || bridge[i].anyport) {
+    if ((bridge[i].addr.s_addr == sa->sin_addr.s_addr) || bridge[i].anyport) {
       bridge[i].port = sa->sin_port;
       return i;
     }
@@ -209,19 +247,23 @@ int lookup_bridge(char *newbridge) {
   int i;
   size_t l = strlen(newbridge); /* Xcode wants limits.h */
 
-  if (Verbose) printf("Trying to match %s\n", newbridge);
+  if (Verbose)
+    printf("Trying to match %s\n", newbridge);
 
   for (i = 0; i < bcnt; i++) {
-    if (Verbose) printf("Matching against: %s\n", bridge[i].name);
+    if (Verbose)
+      printf("Matching against: %s\n", bridge[i].name);
 
     if ((strcmp(newbridge, bridge[i].name) == 0) &&
         (l == strlen(bridge[i].name))) {
-      if (Verbose) printf("Found match: %s == %s\n", newbridge, bridge[i].name);
+      if (Verbose)
+        printf("Found match: %s == %s\n", newbridge, bridge[i].name);
       return i;
     }
   }
 
-  if (Verbose) printf("No match found\n");
+  if (Verbose)
+    printf("No match found\n");
 
   return -1;
 }
@@ -262,7 +304,8 @@ void add_bridge(char *name, char *dst) {
         exit(1);
       }
 
-      if (ebuf[0]) printf("warning: %s\n", ebuf);
+      if (ebuf[0])
+        printf("warning: %s\n", ebuf);
 
       pcap_set_promisc(bridge[bcnt].pcap, 1);
       pcap_set_immediate_mode(bridge[bcnt].pcap, 1);
@@ -271,10 +314,16 @@ void add_bridge(char *name, char *dst) {
       pgm.bf_len = sizeof(insns) / sizeof(struct bpf_insn);
       pgm.bf_insns = insns;
 
+#ifndef NOBPF
       if (pcap_setfilter(bridge[bcnt].pcap, &pgm) < 0) {
         pcap_perror(bridge[bcnt].pcap, "loading filter program");
         exit(1);
       }
+#else
+      printf(
+          "Warning: operating without BPF filtering, performance will take a "
+          "hit as a result\n");
+#endif
 
 #if 0
       pcap_setnonblock(bridge[bcnt].pcap, 1, ebuf);
@@ -308,7 +357,8 @@ void add_bridge(char *name, char *dst) {
       }
     }
     if (found) {
-      for (i = 0; i < MAXTYP; i++) bridge[bcnt].types[i] = 0;
+      for (i = 0; i < MAXTYP; i++)
+        bridge[bcnt].types[i] = 0;
 
       bridge[bcnt].rcount = 0;
       bridge[bcnt].dcount = 0;
@@ -318,7 +368,8 @@ void add_bridge(char *name, char *dst) {
       bridge[bcnt].anyport = anyport;
 
       bcnt++;
-      if (Verbose) printf("Adding router ''%s''. %08x:%d\n", name, addr, port);
+      if (Verbose)
+        printf("Adding router ''%s''. %08x:%d\n", name, addr, port);
     }
   } else {
     printf("Warning. Bridge table full. Not adding %s (%s)\n", name, dst);
@@ -332,7 +383,8 @@ void add_bridge(char *name, char *dst) {
 int add_service(char *newbridge, pkttyp type, char *name) {
   int i;
 
-  if (Verbose) printf("Adding %s bridge %s.\n", name, newbridge);
+  if (Verbose)
+    printf("Adding %s bridge %s.\n", name, newbridge);
 
   if ((i = lookup_bridge(newbridge)) >= 0) {
     if (bridge[i].types[type]++ > 0) {
@@ -360,7 +412,8 @@ void read_conf(int x) {
   }
 
   for (i = 0; i < bcnt; i++) {
-    if (bridge[i].fd != sd) close(bridge[i].fd);
+    if (bridge[i].fd != sd)
+      close(bridge[i].fd);
   }
   bcnt = 0;
 
@@ -377,17 +430,41 @@ void read_conf(int x) {
 
   line = 0;
   while (!feof(f)) {
-    if (fgets(buf, 80, f) == NULL) continue;
+    if (fgets(buf, 80, f) == NULL)
+      continue;
     buf[strlen(buf) - 1] = 0;
     line++;
     if ((strlen(buf) > 2) && (buf[0] != '!')) {
       if (buf[0] == '[') {
         mode = -1;
-        if (strcmp(buf, "[bridge]") == 0) mode = 0;
-        if (strcmp(buf, "[decnet]") == 0) mode = 1;
-        if (strcmp(buf, "[lat]") == 0) mode = 2;
-        if (strcmp(buf, "[ipxii]") == 0) mode = 3;
-        if (strcmp(buf, "[ipxraw]") == 0) mode = 4;
+        if (strcmp(buf, "[bridge]") == 0)
+          mode = 0;
+        if (strcmp(buf, "[decnet]") == 0)
+          mode = 1;
+        if (strcmp(buf, "[lat]") == 0)
+          mode = 2;
+        if (strcmp(buf, "[ipxii]") == 0)
+          mode = 3;
+        if (strcmp(buf, "[ipxraw]") == 0)
+          mode = 4;
+        if (strcmp(buf, "[atalk]") == 0)
+          mode = 5;
+        if (strcmp(buf, "[netbios]") == 0)
+          mode = 6;
+        if (strcmp(buf, "[ip]") == 0)
+          mode = 7;
+        if (strcmp(buf, "[ip6]") == 0)
+          mode = 8;
+        if (strcmp(buf, "[arp]") == 0)
+          mode = 9;
+        if (strcmp(buf, "[apollo]") == 0)
+          mode = 10;
+        if (strcmp(buf, "[xns]") == 0)
+          mode = 11;
+        if (strcmp(buf, "[sna]") == 0)
+          mode = 12;
+        if (strcmp(buf, "[osi]") == 0)
+          mode = 13;
 #if 0
         if(sscanf(buf,"[source %d.%d]", &area, &node) == 2) mode = 3;
         if(strcmp(buf,"[relay]") == 0) mode = 4;
@@ -398,33 +475,69 @@ void read_conf(int x) {
         }
       } else {
         switch (mode) {
-          case 0:
-            if (sscanf(buf, "%s %s", buf1, buf2) == 2) {
-              add_bridge(buf1, buf2);
-            } else {
-              printf("Bad bridge at line %d\n%s\n", line, buf);
-              exit(1);
-            }
-            break;
-          case 1:
-            if (!add_service(buf, DECnet, "DECnet"))
-              printf("%d: DECnet bridge %s don't exist.\n", line, buf);
-            break;
-          case 2:
-            if (!add_service(buf, LAT, "LAT"))
-              printf("%d: LAT bridge %s don't exist.\n", line, buf);
-            break;
-          case 3:
-            if (!add_service(buf, IPXII, "IPXII"))
-              printf("%d: IPXII bridge %s don't exist.\n", line, buf);
-            break;
-          case 4:
-            if (!add_service(buf, IPXRAW, "IPXRAW"))
-              printf("%d: IPXRAW bridge %s don't exist.\n", line, buf);
-            break;
-          default:
-            printf("weird state at line %d\n", line);
+        case 0:
+          if (sscanf(buf, "%s %s", buf1, buf2) == 2) {
+            add_bridge(buf1, buf2);
+          } else {
+            printf("Bad bridge at line %d\n%s\n", line, buf);
             exit(1);
+          }
+          break;
+        case 1:
+          if (!add_service(buf, DECnet, "DECnet"))
+            printf("%d: DECnet bridge %s don't exist.\n", line, buf);
+          break;
+        case 2:
+          if (!add_service(buf, LAT, "LAT"))
+            printf("%d: LAT bridge %s don't exist.\n", line, buf);
+          break;
+        case 3:
+          if (!add_service(buf, IPXII, "IPXII"))
+            printf("%d: IPXII bridge %s don't exist.\n", line, buf);
+          break;
+        case 4:
+          if (!add_service(buf, IPXRAW, "IPXRAW"))
+            printf("%d: IPXRAW bridge %s don't exist.\n", line, buf);
+          break;
+        case 5:
+          if (!add_service(buf, ATALK, "ATALK"))
+            printf("%d: AppleTalk bridge %s don't exist.\n", line, buf);
+          break;
+        case 6:
+          if (!add_service(buf, NETBIOS, "NETBIOS"))
+            printf("%d: LLC NetBIOS bridge %s don't exist.\n", line, buf);
+          break;
+        case 7:
+          if (!add_service(buf, IP, "IP"))
+            printf("%d: IP bridge %s don't exist.\n", line, buf);
+          break;
+        case 8:
+          if (!add_service(buf, IP6, "IP6"))
+            printf("%d: IPv6 bridge %s don't exist.\n", line, buf);
+          break;
+        case 9:
+          if (!add_service(buf, ARP, "ARP"))
+            printf("%d: ARP bridge %s don't exist.\n", line, buf);
+          break;
+        case 10:
+          if (!add_service(buf, APOLLO, "APOLLO"))
+            printf("%d: Apollo bridge %s don't exist.\n", line, buf);
+          break;
+        case 11:
+          if (!add_service(buf, XNS, "XNS"))
+            printf("%d: XNS bridge %s don't exist.\n", line, buf);
+          break;
+        case 12:
+          if (!add_service(buf, OSI, "OSI"))
+            printf("%d: ISO/OSI bridge %s don't exist.\n", line, buf);
+          break;
+        case 13:
+          if (!add_service(buf, SNA, "SNA"))
+            printf("%d: SNA bridge %s don't exist.\n", line, buf);
+          break;
+        default:
+          printf("weird state at line %d\n", line);
+          exit(1);
         }
       }
     }
@@ -440,23 +553,82 @@ int is_ethertype(struct DATA *d, unsigned short type) {
   unsigned char x[2];
   x[0] = (type >> 8);
   x[1] = (type & 255); /* Yuck, but this makes it byte-order safe */
-  if(Verbose) printf("EtherType is %02x%02x\n", d->data[12], d->data[13]);
+  if (Verbose)
+    printf("EtherType is %02x%02x\n", d->data[12], d->data[13]);
   return ((d->data[13] == x[1]) && (d->data[12] == x[0]));
 }
 
+/* is_snaptype
+   Check if an ethernet packet have a specific SNAP type
+   Returns true if so
+*/
+int is_snaptype(struct DATA *d, unsigned short type) {
+  unsigned char x[2];
+  x[0] = (type >> 8);
+  x[1] = (type & 255); /* Yuck, but this makes it byte-order safe */
+  if (Verbose)
+    printf("SNAP type is %02x%02x\n", d->data[20], d->data[21]);
+  return ((d->data[21] == x[1]) && (d->data[20] == x[0]));
+}
+
+/* is_rawtype
+   Check if an ethernet packet bears either 0xAAAA (SNAP),
+   0xFFFF (IPX 802.3), or something else (some other LLC SSAP/DSAP)
+   Returns true if so
+*/
+int is_rawtype(struct DATA *d, unsigned short type) {
+  unsigned char x[2];
+  x[0] = (type >> 8);
+  x[1] = (type & 255); /* Yuck, but this makes it byte-order safe */
+  if (Verbose)
+    printf("Raw/LLC type is %02x%02x\n", d->data[14], d->data[15]);
+  return ((d->data[15] == x[1]) && (d->data[14] == x[0]));
+}
 
 /* is_ipxii
    Returns true if a packet is of type IPX Ethernet II
 */
-int is_ipxii(struct DATA *data) {
-  return is_ethertype(data, ETHERTYPE_IPXII);
+int is_ipxii(struct DATA *data) { return is_ethertype(data, ETHERTYPE_IPXII); }
+
+/* is_ip
+   Returns true if a packet is of type TCP/IP
+*/
+int is_ip(struct DATA *data) { return is_ethertype(data, ETHERTYPE_IP); }
+
+/* is_ip6
+   Returns true if a packet is of type TCP/IP V6
+*/
+int is_ip6(struct DATA *data) { return is_ethertype(data, ETHERTYPE_IP6); }
+
+/* is_arp
+   Returns true if a packet is of type IPX Ethernet II
+*/
+int is_arp(struct DATA *data) { return is_ethertype(data, ETHERTYPE_ARP); }
+
+/* is_apollo
+   Returns true if a packet is of type Apollo Domain
+*/
+int is_apollo(struct DATA *data) {
+  return is_ethertype(data, ETHERTYPE_APOLLO);
 }
 
 /* is_ipxraw
    Returns true if a packet is of type IPX Raw 802.3
 */
-int is_ipxraw(struct DATA *data) {
-  return is_ethertype(data, ETHERTYPE_IPXRAW);
+int is_ipxraw(struct DATA *data) { return is_rawtype(data, RAWTYPE_IPXRAW); }
+
+/* is_netbios
+   Returns true if a packet is of type NetBIOS LLC
+*/
+int is_netbios(struct DATA *data) { return is_rawtype(data, RAWTYPE_NETBIOS); }
+
+/* is_atalk
+   Returns true if a packet is of type SNAP AppleTalk
+*/
+int is_atalk(struct DATA *data) {
+  if (is_rawtype(data, RAWTYPE_SNAP))
+    return is_snaptype(data, SNAPTYPE_ATALK);
+  return 0;
 }
 
 /* is_decnet
@@ -464,6 +636,18 @@ int is_ipxraw(struct DATA *data) {
 */
 int is_decnet(struct DATA *data) {
   return is_ethertype(data, ETHERTYPE_DECnet);
+}
+
+/* is_osi
+   Returns true if a packet is of type ISO/OSI CLNP
+*/
+int is_osi(struct DATA *data) { return is_rawtype(data, RAWTYPE_OSI); }
+
+/* is_sna
+   Returns true if a packet is of type SNA LLC
+*/
+int is_sna(struct DATA *data) {
+  return (is_rawtype(data, RAWTYPE_SNA) || is_rawtype(data, RAWTYPE_SNATEST));
 }
 
 /* is_lat
@@ -513,8 +697,10 @@ void throttle(int index) {
    Checks if a bridge is active or not.
 */
 int active(int index) {
-  if (bridge[index].passive == 0) return 1;
-  if (timedelta(bridge[index].lastrcv) < PASSIVE_TMO) return 1;
+  if (bridge[index].passive == 0)
+    return 1;
+  if (timedelta(bridge[index].lastrcv) < PASSIVE_TMO)
+    return 1;
   return 0;
 }
 
@@ -524,7 +710,8 @@ int active(int index) {
 void send_packet(int index, struct DATA *d) {
   struct sockaddr_in sa;
 
-  if (index == d->source) return; /* Avoid loopback of data. */
+  if (index == d->source)
+    return; /* Avoid loopback of data. */
   if (bridge[index].types[d->type] == 0)
     return; /* Avoid sending unwanted frames */
 
@@ -533,29 +720,34 @@ void send_packet(int index, struct DATA *d) {
     throttle(index);
 
     if (bridge[index].addr.s_addr == 0) {
-      if(Verbose) printf("pcap_injecting length %d\n", d->len);
-      if(Verbose) printf("sent ethertype is %02x%02x\n", d->data[12], d->data[13]);
+      if (Verbose)
+        printf("pcap_injecting length %d\n", d->len);
+      if (Verbose)
+        printf("sent ethertype is %02x%02x\n", d->data[12], d->data[13]);
       if (pcap_inject(bridge[index].pcap, d->data, d->len) == -1)
         perror("Error local network write"); /* Say something, but carry on */
-      if(Verbose) printf("packet written\n");
+      if (Verbose)
+        printf("packet written\n");
 
     } else {
-      unsigned char *outbuf = malloc(d->len + 2);
-      outbuf[0] = 0x30;
-      outbuf[1] = 0x00;
-      memcpy(outbuf + 2, d->data, d->len);
-      sa.sin_family = AF_INET; /* Remote network. */
-      sa.sin_port = bridge[index].port;
-      sa.sin_addr.s_addr = bridge[index].addr.s_addr;
-      /* if(Verbose) printf("sendto'ing data to %s proto %d len %d\n", inet_ntoa(sa.sin_addr), ntohs(sa.sin_port), d->len - 2); */
-      if(sendto(bridge[index].fd, outbuf, d->len + 2, 0,
-                 (struct sockaddr *)&sa, sizeof(sa)) == -1)
-        perror("sendto");
-      free(outbuf);
+          unsigned char *outbuf = malloc(d->len + 2);
+          outbuf[0] = 0x30;
+          outbuf[1] = 0x00;
+          memcpy(outbuf + 2, d->data, d->len);
+          sa.sin_family = AF_INET; /* Remote network. */
+          sa.sin_port = bridge[index].port;
+          sa.sin_addr.s_addr = bridge[index].addr.s_addr;
+          /* if(Verbose) printf("sendto'ing data to %s proto %d len %d\n",
+           * inet_ntoa(sa.sin_addr), ntohs(sa.sin_port), d->len - 2); */
+          if (sendto(bridge[index].fd, outbuf, d->len + 2, 0,
+                     (struct sockaddr *)&sa, sizeof(sa)) == -1)
+            perror("sendto");
+          free(outbuf);
     }
 
     bridge[index].lastptr++;
-    if (bridge[index].lastptr == MAXMEM) bridge[index].lastptr = 0;
+    if (bridge[index].lastptr == MAXMEM)
+      bridge[index].lastptr = 0;
 
     memcpy(bridge[index].last[bridge[index].lastptr], d->data, HDRLEN);
   }
@@ -591,7 +783,8 @@ void register_source(struct DATA *d) {
   hosts[hash] = h;
   memcpy(h->mac, d->data + 6, 6);
   h->bridge = d->source;
-  if (Verbose) printf("Adding new hash entry. Port is %d\n", h->bridge);
+  if (Verbose)
+    printf("Adding new hash entry. Port is %d\n", h->bridge);
 }
 
 /* Locate destination for a data packet.
@@ -606,12 +799,14 @@ int locate_dest(struct DATA *d) {
   unsigned short hash;
   struct HOST *h;
 
-  if (d->data[0] & 1) return -1; /* Ethernet multicast */
+  if (d->data[0] & 1)
+    return -1; /* Ethernet multicast */
 
   hash = *(unsigned short *)(d->data + 4);
   h = hosts[hash];
   while (h) {
-    if (memcmp(h->mac, d->data, 6) == 0) return h->bridge;
+    if (memcmp(h->mac, d->data, 6) == 0)
+      return h->bridge;
     h = h->next;
   }
   return -1;
@@ -620,10 +815,26 @@ int locate_dest(struct DATA *d) {
 /* Figure out what type a packet is.
  */
 pkttyp classify_packet(struct DATA *d) {
-  if (is_ipxii(d)) return IPXII;
-  if (is_ipxraw(d)) return IPXRAW;
-  if (is_decnet(d)) return DECnet;
-  if (is_lat(d)) return LAT;
+  if (is_ip(d))
+    return IP;
+  if (is_ip6(d))
+    return IP6;
+  if (is_atalk(d))
+    return ATALK;
+  if (is_arp(d))
+    return ARP;
+  if (is_apollo(d))
+    return APOLLO;
+  if (is_netbios(d))
+    return NETBIOS;
+  if (is_ipxii(d))
+    return IPXII;
+  if (is_ipxraw(d))
+    return IPXRAW;
+  if (is_decnet(d))
+    return DECnet;
+  if (is_lat(d))
+    return LAT;
 
   return Unknown;
 }
@@ -646,42 +857,53 @@ void process_packet(struct DATA *d) {
   int i;
 
   bridge[d->source].zcount++;
-  if(Verbose) printf("current zcount for d->source %d is %d\n", d->source, bridge[d->source].zcount);
+  if (Verbose)
+    printf("current zcount for d->source %d is %d\n", d->source,
+           bridge[d->source].zcount);
   d->type = classify_packet(d);
-  if(Verbose) printf("classified packet type is %d\n", d->type);
+  if (Verbose)
+    printf("classified packet type is %d\n", d->type);
 
   if (d->type == Unknown) {
-    if(Verbose) puts("packet type is unknown!");
+    if (Verbose)
+      puts("packet type is unknown!");
     bridge[d->source].dcount++;
     return;
   }
   if (bridge[d->source].types[d->type] == 0) {
-    if(Verbose) printf("(1) dcount for interface is now %d\n", bridge[d->source].dcount++);
+    if (Verbose)
+      printf("(1) dcount for interface is now %d\n",
+             bridge[d->source].dcount++);
     bridge[d->source].dcount++;
     return;
   }
 
-
   bridge[d->source].rcount++;
-    if(Verbose) printf("rcount for interface is now %d\n", bridge[d->source].rcount++);
+  if (Verbose)
+    printf("rcount for interface is now %d\n", bridge[d->source].rcount++);
   for (i = 0; i < MAXMEM; i++) {
     if (memcmp(bridge[d->source].last[i], d->data, HDRLEN) == 0) {
       bridge[d->source].dcount++;
-      if(Verbose) printf("(2) dcount for interface is now %d\n", bridge[d->source].dcount++);
+      if (Verbose)
+        printf("(2) dcount for interface is now %d\n",
+               bridge[d->source].dcount++);
       return;
     }
   }
 
   gettimeofday(&bridge[d->source].lastrcv, NULL);
   bridge[d->source].xcount++;
-  if(Verbose) printf("xcount for interface is now %d\n", bridge[d->source].xcount++);
-  
+  if (Verbose)
+    printf("xcount for interface is now %d\n", bridge[d->source].xcount++);
+
   register_source(d);
   dst = locate_dest(d);
-  if(Verbose) printf("dest ID is %d\n", dst);
+  if (Verbose)
+    printf("dest ID is %d\n", dst);
   if (dst == -1) {
     int i;
-    for (i = 0; i < bcnt; i++) send_packet(i, d);
+    for (i = 0; i < bcnt; i++)
+      send_packet(i, d);
   } else {
     send_packet(dst, d);
   }
@@ -692,13 +914,12 @@ void dump_data() {
 
   printf("Host table:\n");
   for (i = 0; i < bcnt; i++)
-    printf(
-        "%d: %s %s:%d (Rx: %d(%d) Tx: %d Fw: %d (Drop rx: %d)) Active: %d "
-        "Throttle: %d(%03o)\n",
-        i, bridge[i].name, inet_ntoa(bridge[i].addr), ntohs(bridge[i].port),
-        bridge[i].rcount, bridge[i].zcount, bridge[i].tcount, bridge[i].xcount,
-        bridge[i].dcount, active(i), bridge[i].throttlecount,
-        bridge[i].throttle & 255);
+    printf("%d: %s %s:%d (Rx: %d(%d) Tx: %d Fw: %d (Drop rx: %d)) Active: %d "
+           "Throttle: %d(%03o)\n",
+           i, bridge[i].name, inet_ntoa(bridge[i].addr), ntohs(bridge[i].port),
+           bridge[i].rcount, bridge[i].zcount, bridge[i].tcount,
+           bridge[i].xcount, bridge[i].dcount, active(i),
+           bridge[i].throttlecount, bridge[i].throttle & 255);
   printf("Hash of known destinations:\n");
   for (i = 0; i < HOST_HASH; i++) {
     struct HOST *h;
@@ -736,33 +957,32 @@ int main(int argc, char **argv) {
 
   while ((ch = getopt(argc, argv, "d:p:hvV")) != -1) {
     switch (ch) {
-      case 'd':
-        config_filename =
-            malloc((int)strlen(CONF_FILE) + (int)strlen(optarg) + 2);
-        sprintf(config_filename, "%s/%s", optarg, CONF_FILE);
-        break;
-      case ':':
-      case 'p':
-        printf("d: %s\n", optarg);
-        port = atoi(optarg);
-        break;
-      case 'v':
-        Verbose = 1;
-        VeryVerbose = 0;
-        break;
-      case 'V':
-        Verbose = 1;
-        VeryVerbose = 1;
-        break;
+    case 'd':
+      config_filename =
+          malloc((int)strlen(CONF_FILE) + (int)strlen(optarg) + 2);
+      sprintf(config_filename, "%s/%s", optarg, CONF_FILE);
+      break;
+    case ':':
+    case 'p':
+      printf("d: %s\n", optarg);
+      port = atoi(optarg);
+      break;
+    case 'v':
+      Verbose = 1;
+      VeryVerbose = 0;
+      break;
+    case 'V':
+      Verbose = 1;
+      VeryVerbose = 1;
+      break;
 
-      case '?':
-      case 'h':
-      default:
-        printf(
-            "usage: %s [-p <listen protocol number>] [-d <dir>] -v -V "
-            "[<port>]\n",
-            argv[0]);
-        exit(1);
+    case '?':
+    case 'h':
+    default:
+      printf("usage: %s [-p <listen protocol number>] [-d <dir>] -v -V "
+             "[<port>]\n",
+             argv[0]);
+      exit(1);
     }
   }
 
@@ -778,7 +998,8 @@ int main(int argc, char **argv) {
   }
 
 #if DPORT
-  if (port == 0) port = DPORT;
+  if (port == 0)
+    port = DPORT;
 #endif
 
   if (port == 0) {
@@ -789,20 +1010,35 @@ int main(int argc, char **argv) {
   if (VeryVerbose) {
     printf("Printing all debugging messages\n");
   } else {
-    if (Verbose) printf("Printing most debugging messages\n");
+    if (Verbose)
+      printf("Printing most debugging messages\n");
   }
 
-  if (Verbose) printf("Config filename: %s\n", config_filename);
+  if (Verbose)
+    printf("Config filename: %s\n", config_filename);
 
-  if ((sd = socket(PF_INET, SOCK_RAW, port)) == -1) {
-    fprintf(stderr, "Could not create raw socket, do you have permission?\n");
-    perror("socket");
-    exit(1);
+  if (port == DPORT) {
+    if ((sd = socket(PF_INET, SOCK_RAW, port)) == -1) {
+      fprintf(stderr, "Could not create raw socket, do you have permission?\n");
+      perror("socket");
+      exit(1);
+    }
+    packetoffset = 22; /* IP header + EtherIP header */
+    sa.sin_family = AF_INET;
+    sa.sin_port = 0;
+    sa.sin_addr.s_addr = INADDR_ANY;
+  } else {
+    if ((sd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
+      fprintf(stderr, "Could not create UDP socket, do you have permission?\n");
+      perror("socket");
+      exit(1);
+    }
+    packetoffset = 2; /* just EtherIP header, EtherIP/UDP mode = CLAP mode */
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(port);
+    sa.sin_addr.s_addr = INADDR_ANY;
   }
 
-  sa.sin_family = AF_INET;
-  sa.sin_port = 0;
-  sa.sin_addr.s_addr = INADDR_ANY;
   if (bind(sd, (struct sockaddr *)&sa, sizeof(sa)) == -1) {
     perror("bind");
     exit(1);
@@ -810,14 +1046,16 @@ int main(int argc, char **argv) {
 
   read_conf(0);
 
-  if (Verbose) dump_data();
+  if (Verbose)
+    dump_data();
 
   while (1) {
     FD_ZERO(&fds);
     hsock = 0;
     for (i = 0; i < bcnt; i++) {
       FD_SET(bridge[i].fd, &fds);
-      if (bridge[i].fd > hsock) hsock = bridge[i].fd;
+      if (bridge[i].fd > hsock)
+        hsock = bridge[i].fd;
     }
 
     if (select(hsock + 1, &fds, NULL, NULL, NULL) == -1) {
@@ -840,13 +1078,16 @@ int main(int argc, char **argv) {
           }
         } else {
           ilen = sizeof(rsa);
-          if ((d.len = recvfrom(bridge[i].fd, buf, 1522, 0,
+          if ((d.len = recvfrom(bridge[i].fd, buf, 1500 + packetoffset, 0,
                                 (struct sockaddr *)&rsa, &ilen)) > 0) {
-		    if(Verbose) printf("got something! len = %d\n", d.len);
-            d.data = buf + 22;
+            if (Verbose)
+              printf("got something! len = %d\n", d.len);
+            d.data = buf + packetoffset;
             if ((d.source = lookup(&rsa)) >= 0) {
-		      if(Verbose) printf("d.source %d lookup matched, processing now\n", d.source);
-              process_packet(&d); 
+              if (Verbose)
+                printf("d.source %d lookup matched, processing now\n",
+                       d.source);
+              process_packet(&d);
             } else {
               dump_nomatch(&rsa, &d);
             }

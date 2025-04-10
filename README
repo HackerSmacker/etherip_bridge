@@ -1,14 +1,23 @@
-Simple DECnet/LAT EtherIP/GRE shim, based on the HECnet DECnet/LAT <--> UDP bridge program
+Simple EtherIP/CLAP shim, based on the HECnet DECnet/LAT <--> UDP bridge program
 --> WARNING: This program only works on Mac OS X, FreeBSD, NetBSD, OpenBSD, and Linux. */
 
 1. What is this?
 This is a program that listens on an Ethernet device in promiscious mode, checks inbound packets for the DECnet Phase IV, LAT, or both EtherType
-numbers, and sends that data to a remote host using the EtherIP or GRE protocol. This, of course, also works in reverse!
+numbers, and sends that data to a remote host using the EtherIP protocol. This, of course, also works in reverse! In addition, HSnet CLAP is 
+supported!
 
-2. What is EtherIP?
+2. What is EtherIP? What is CLAP?
 EtherIP is IP over Ethernet, with a minimal header. The protocol number is 97, and its header length is 2 bytes. The encapsulation is as follows:
 [Ethernet II header, ethertype = IP]
 [IPv4 header, protocol = 97]
+[EtherIP header, header contents = X'3000']
+[Ethernet II header, ethertype = DECnet or LAT]
+[DECnet or LAT header]
+CLAP (Combined LAN Access Protocol) is UDP-encapsulated EtherIP. This was the original purpose of my modified version of this program, and is a
+multiplexing/combining NAT-aware Ethernet tunnel. The encapsulation is as follows:
+[Ethernet II header, ethertype = IP]
+[IPv4 header, protocol = UDP]
+[UDP header, port = whatever
 [EtherIP header, header contents = X'3000']
 [Ethernet II header, ethertype = DECnet or LAT]
 [DECnet or LAT header]
@@ -16,7 +25,9 @@ EtherIP is IP over Ethernet, with a minimal header. The protocol number is 97, a
 3. How do I run it?
 Edit the bridge.conf, and set the "local" line to reflect the name of the Ethernet controller you wish to transceive on. Set the remotes to be
 named whatever you want, but be sure you specify the remote IP in the form of IP:proto, where proto is 97 for EtherIP (but you can enter 
-whatever you want here for fun). 
+whatever you want here for fun). Next, edit bridge.c and configure the two macros up top -- DPORT (which sets the EtherIP protocol number), and
+NOBPF (which, if enabled, will ONLY support Ethernet II protocols and increase performance slightly; keep this defined to 1 unless you're on a
+really slow computer). 
 
 4. What's the point?
 EtherIP is a standard protocol that a variety of systems support, and this program is perfectly interoperable with FreeBSD EtherIP (gif tunnels
@@ -49,7 +60,23 @@ decnetgw1
 local
 latgw1
 <end>
-This should be enough documentation!
+This should be enough documentation! To do UDP, run the program with ./bridge <portnum>, and replace the 97 in the config with the remote port
+number. 
 
 6. What else can this do?
-This program can be modified to speak IPX over Ethernet II but also IPX over Ethernet RAW! 
+The following protocol types, specified in the [brackets] in the config file, are supported:
+- ip = IPv4
+- ip6 = IPv6
+- lat = DEC LAT and MOP
+- decnet = DECnet Phase IV
+- atalk = AppleTalk SNAP
+- netbios = LLC NetBIOS
+- ipxii = IPX, Ethernet II encap
+- ipxraw = IPX, IEEE 802.3 (original IPX)
+- apollo = Apollo Domain protocol
+- xns = Xerox NS
+- osi = ISO/OSI Network Layer (includes ISIS)
+- sna = IBM SNA
+
+7. Can this program encapsulate stuff in UDP?
+Yes, it can. If you set the protocol number to ANYTHING but 97, that number will be reused for a UDP port number. 
