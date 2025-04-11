@@ -105,7 +105,6 @@ static int packetoffset = 22;   /* Packet offset, 22 for raw mode and 2 for UDP 
 #define ETHERTYPE_LOOPBACK 0x9000   /* LOOP protocol, II */
 #define ETHERTYPE_AX25 0x08FF       /* AX.25 in Ethernet (BPQETHER), II */
 #define ETHERTYPE_PPP 0x8864        /* PPP over Ethernet, II */
-#define ETHERTYPE_ATALK 0x809B      /* AppleTalk, II (does this really exist?) */
 #define ETHERTYPE_MPLS 0x8847       /* MultiProtocol Label Switching */
 #define ETHERTYPE_SNA 0x80d5        /* SNA over Ethernet II */
 #define RAWTYPE_IPXRAW 0xFFFF       /* IPX "raw". 802.3 */
@@ -121,6 +120,7 @@ static int packetoffset = 22;   /* Packet offset, 22 for raw mode and 2 for UDP 
 #define RAWTYPE_IP 0x0606           /* DoD IP encapsulation, very rare, 802.3 */
 #define RAWTYPE_IPX 0xE0E0          /* IPX, 802.2 LLC  */
 #define SNAPTYPE_ATALK 0x809B       /* AppleTalk, SNAP */
+#define SNAPTYPE_AARP 0x80F3        /* AppleTalk ARP, SNAP */
 #define SNAPTYPE_CDP 0x2000         /* Cisco Discovery Protocol, SNAP */
 #define SNAPTYPE_IP 0x0800          /* IP, SNAP (pretty rare) */
 #define SNAPTYPE_IPX 0x8137         /* IP, SNAP (pretty rare) */
@@ -527,7 +527,7 @@ int is_ethertype(struct DATA* d, unsigned short type) {
     unsigned char x[2];
     x[0] = (type >> 8);
     x[1] = (type & 255); /* Yuck, but this makes it byte-order safe */
-    if (Verbose) printf("EtherType is %02x%02x\n", d->data[12], d->data[13]);
+    if (Verbose) printf("(checking) EtherType is %02x%02x\n", d->data[12], d->data[13]);
     return ((d->data[13] == x[1]) && (d->data[12] == x[0]));
 }
 
@@ -540,7 +540,7 @@ int is_snaptype(struct DATA* d, unsigned short type) {
     unsigned char x[2];
     x[0] = (type >> 8);
     x[1] = (type & 255); /* Yuck, but this makes it byte-order safe */
-    if (Verbose) printf("SNAP type is %02x%02x\n", d->data[20], d->data[21]);
+    if (Verbose) printf("(checking) SNAP type is %02x%02x\n", d->data[20], d->data[21]);
     return ((d->data[21] == x[1]) && (d->data[20] == x[0]));
 }
 
@@ -553,7 +553,7 @@ int is_rawtype(struct DATA* d, unsigned short type) {
     unsigned char x[2];
     x[0] = (type >> 8);
     x[1] = (type & 255); /* Yuck, but this makes it byte-order safe */
-    if (Verbose) printf("Raw/LLC type is %02x%02x\n", d->data[14], d->data[15]);
+    if (Verbose) printf("(checking) Raw/LLC type is %02x%02x\n", d->data[14], d->data[15]);
     return ((d->data[15] == x[1]) && (d->data[14] == x[0]));
 }
 
@@ -577,8 +577,8 @@ PROTO_MATCH(decnet, ethertype, ETHERTYPE_DECnet);
 PROTO_MATCH(netbios, rawtype, RAWTYPE_NETBIOS);
 PROTO_MATCH(osi, rawtype, RAWTYPE_OSI);
 PROTO_MATCH_MANY(atalk) {
-    return ((is_rawtype(data, RAWTYPE_SNAP) && is_snaptype(data, SNAPTYPE_ATALK)) ||
-             is_ethertype(data, ETHERTYPE_ATALK));
+    return ((is_snaptype(data, SNAPTYPE_ATALK)) ||
+             is_snaptype(data, SNAPTYPE_AARP));
 }
 PROTO_MATCH_MANY(sna) {
     return (is_rawtype(data, RAWTYPE_SNA) || is_rawtype(data, RAWTYPE_SNATEST) ||
@@ -771,6 +771,7 @@ pkttyp classify_packet(struct DATA* d) {
     CLASSIFY(cdp, CDP);
     CLASSIFY(mpls, MPLS);
     CLASSIFY(ax25, AX25);
+    CLASSIFY(atalk, ATALK);
     return Unknown;
 }
 
