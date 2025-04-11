@@ -1,2 +1,4 @@
-bridge: bridge.c
-	cc -O2 -Wall -o bridge bridge.c -lpcap
+CFLAGS=-O2 -Wall
+LDLIBS=-lpcap
+
+bridge:
