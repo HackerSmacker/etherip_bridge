@@ -661,7 +661,7 @@ void send_packet(int index, struct DATA* d) {
         throttle(index);
 
         if (bridge[index].addr.s_addr == 0) {
-            if (Verbose) printf("pcap_injecting length %d\n", d->len - packetoffset);
+            if (Verbose) printf("pcap_injecting length %ld\n", d->len - packetoffset);
             if (Verbose) printf("sent ethertype is %02x%02x\n", d->data[12], d->data[13]);
             if (Verbose) printf("sent LLC is %02x%02x\n", d->data[14], d->data[15]);
             if (pcap_inject(bridge[index].pcap, d->data, d->len - packetoffset) == -1)
@@ -1000,7 +1000,7 @@ int main(int argc, char** argv) {
                 } else {
                     ilen = sizeof(rsa);
                     if ((d.len = recvfrom(bridge[i].fd, buf, 1500 + packetoffset, 0, (struct sockaddr*)&rsa, &ilen)) > 0) {
-                        if (Verbose) printf("got something! len = %d\n", d.len);
+                        if (Verbose) printf("got something! len = %ld\n", d.len);
                         d.data = buf + packetoffset;
                         if ((d.source = lookup(&rsa)) >= 0) {
                             if (Verbose) printf("d.source %d lookup matched, processing now\n", d.source);
