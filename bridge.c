@@ -107,13 +107,19 @@ static int packetoffset = 22;   /* Packet offset, 22 for raw mode and 2 for UDP 
 #define ETHERTYPE_PPP 0x8864        /* PPP over Ethernet, II */
 #define ETHERTYPE_ATALK 0x809B      /* AppleTalk, II (does this really exist?) */
 #define ETHERTYPE_MPLS 0x8847       /* MultiProtocol Label Switching */
+#define ETHERTYPE_SNA 0x80d5        /* SNA over Ethernet II */
 #define RAWTYPE_IPXRAW 0xFFFF       /* IPX "raw". 802.3 */
 #define RAWTYPE_SNAP 0xAAAA         /* marker for SNAP, 802.3 */
 #define RAWTYPE_OSI 0xFEFE          /* ISO/OSI/CLNS/CLNP, 802.3 */
 #define RAWTYPE_SNA 0x0404          /* SNA over LLC main functions, 802.3 */
 #define RAWTYPE_SNATEST 0x0405      /* SNA over LLC setup and teardown, 802.3 */
+#define RAWTYPE_SNASETUP1 0x0004    /* SNA over LLC setup and teardown, 802.3 */
+#define RAWTYPE_SNASETUP2 0x0400    /* SNA over LLC setup and teardown, 802.3 */
+#define RAWTYPE_SNASETUP3 0x0401    /* SNA over LLC setup and teardown, 802.3 */
+#define RAWTYPE_SNASETUP4 0x0104    /* SNA over LLC setup and teardown, 802.3 */
 #define RAWTYPE_NETBIOS 0xF0F0      /* NetBIOS over LLC (NetBEUI), 802.3 */
 #define RAWTYPE_IP 0x0606           /* DoD IP encapsulation, very rare, 802.3 */
+#define RAWTYPE_IPX 0xE0E0          /* IPX, 802.2 LLC  */
 #define SNAPTYPE_ATALK 0x809B       /* AppleTalk, SNAP */
 #define SNAPTYPE_CDP 0x2000         /* Cisco Discovery Protocol, SNAP */
 #define SNAPTYPE_IP 0x0800          /* IP, SNAP (pretty rare) */
@@ -210,30 +216,30 @@ struct BRIDGE {
     int throttle;
     int throttlecount;
     struct timeval lastrcv;
-    pcap_t *pcap;
+    pcap_t* pcap;
 };
 
 struct DATA {
     int source;
     pkttyp type;
     ssize_t len; /* xcode wants limits.h type */
-    const unsigned char *data;
+    const unsigned char* data;
 };
 
 struct HOST {
-    struct HOST *next;
+    struct HOST* next;
     unsigned char mac[6];
     int bridge;
 };
 
 #define HOST_HASH 65536
 
-struct HOST *hosts[HOST_HASH];
+struct HOST* hosts[HOST_HASH];
 struct BRIDGE bridge[MAX_HOST];
 int bcnt = 0;
 int sd;
 
-char *config_filename;
+char* config_filename;
 
 /* Here comes the code... */
 
@@ -241,7 +247,7 @@ char *config_filename;
    Based on a sockaddr_in, find the corresponding bridge entry.
    Returns the index of the bridge, or -1 if no match.
 */
-int lookup(struct sockaddr_in *sa) {
+int lookup(struct sockaddr_in* sa) {
     int i;
 
     for (i = 0; i < bcnt; i++) {
@@ -257,7 +263,7 @@ int lookup(struct sockaddr_in *sa) {
    Based on a string, find the corresponding bridge.
    Returns bridge index, or -1 if no match.
 */
-int lookup_bridge(char *newbridge) {
+int lookup_bridge(char* newbridge) {
     int i;
     size_t l = strlen(newbridge); /* Xcode wants limits.h */
 
@@ -281,7 +287,7 @@ int lookup_bridge(char *newbridge) {
 /* add_bridge
      Adds a new bridge entry to the list of bridges
 */
-void add_bridge(char *name, char *dst) {
+void add_bridge(char* name, char* dst) {
     struct hostent *he;
     char rhost[40];
     int port = 0;
@@ -355,7 +361,7 @@ void add_bridge(char *name, char *dst) {
                 addr = *(in_addr_t *)he->h_addr;
                 found = -1;
             } else {
-                found = inet_aton(rhost, (struct in_addr *)&addr);
+                found = inet_aton(rhost, (struct in_addr*)&addr);
             }
             if (found) {
                 strcpy(bridge[bcnt].host, rhost);
@@ -387,7 +393,7 @@ void add_bridge(char *name, char *dst) {
    Adds a service to a named bridge.
    Services are different protocols.
 */
-int add_service(char *newbridge, pkttyp type, char *name) {
+int add_service(char* newbridge, pkttyp type, char* name) {
     int i;
 
     if (Verbose) printf("Adding %s bridge %s.\n", name, newbridge);
@@ -414,7 +420,7 @@ int add_service(char *newbridge, pkttyp type, char *name) {
         break;
 
 void read_conf(int x) {
-    FILE *f;
+    FILE* f;
     int mode = 0;
     int line;
     char buf[80];
@@ -517,7 +523,7 @@ void read_conf(int x) {
    Check if an ethernet packet have a specific ethernet type
    Returns true if so
 */
-int is_ethertype(struct DATA *d, unsigned short type) {
+int is_ethertype(struct DATA* d, unsigned short type) {
     unsigned char x[2];
     x[0] = (type >> 8);
     x[1] = (type & 255); /* Yuck, but this makes it byte-order safe */
@@ -530,7 +536,7 @@ int is_ethertype(struct DATA *d, unsigned short type) {
    NOT check if the given packet actually is an LLC SNAP packet!
    Returns true if so
 */
-int is_snaptype(struct DATA *d, unsigned short type) {
+int is_snaptype(struct DATA* d, unsigned short type) {
     unsigned char x[2];
     x[0] = (type >> 8);
     x[1] = (type & 255); /* Yuck, but this makes it byte-order safe */
@@ -543,7 +549,7 @@ int is_snaptype(struct DATA *d, unsigned short type) {
    0xFFFF (IPX 802.3), or something else (some other LLC SSAP/DSAP)
    Returns true if so
 */
-int is_rawtype(struct DATA *d, unsigned short type) {
+int is_rawtype(struct DATA* d, unsigned short type) {
     unsigned char x[2];
     x[0] = (type >> 8);
     x[1] = (type & 255); /* Yuck, but this makes it byte-order safe */
@@ -575,7 +581,10 @@ PROTO_MATCH_MANY(atalk) {
              is_ethertype(data, ETHERTYPE_ATALK));
 }
 PROTO_MATCH_MANY(sna) {
-    return (is_rawtype(data, RAWTYPE_SNA) || is_rawtype(data, RAWTYPE_SNATEST));
+    return (is_rawtype(data, RAWTYPE_SNA) || is_rawtype(data, RAWTYPE_SNATEST) ||
+            is_rawtype(data, RAWTYPE_SNASETUP1) || is_rawtype(data, RAWTYPE_SNASETUP2) ||
+            is_rawtype(data, RAWTYPE_SNASETUP3) || is_rawtype(data, RAWTYPE_SNASETUP4) ||
+            is_ethertype(data, ETHERTYPE_SNA));
 }
 PROTO_MATCH_MANY(ip) {
     return (is_rawtype(data, RAWTYPE_IP) || is_ethertype(data, ETHERTYPE_IP));
@@ -589,7 +598,8 @@ PROTO_MATCH_MANY(lat) {
 PROTO_MATCH_MANY(ipx) {
     return (is_ethertype(data, ETHERTYPE_IPXII) ||
             is_rawtype(data, RAWTYPE_IPXRAW) ||
-            is_snaptype(data, SNAPTYPE_IPX));
+            is_snaptype(data, SNAPTYPE_IPX) ||
+            is_rawtype(data, RAWTYPE_IPX));
 }
 
 /* timedelta
@@ -638,7 +648,7 @@ int active(int index) {
 /* send_packet
    Send an ethernet packet to a specific bridge.
 */
-void send_packet(int index, struct DATA *d) {
+void send_packet(int index, struct DATA* d) {
     struct sockaddr_in sa;
 
     if (index == d->source)
@@ -651,14 +661,15 @@ void send_packet(int index, struct DATA *d) {
         throttle(index);
 
         if (bridge[index].addr.s_addr == 0) {
-            if (Verbose) printf("pcap_injecting length %d\n", d->len);
+            if (Verbose) printf("pcap_injecting length %d\n", d->len - packetoffset);
             if (Verbose) printf("sent ethertype is %02x%02x\n", d->data[12], d->data[13]);
-            if (pcap_inject(bridge[index].pcap, d->data, d->len) == -1)
+            if (Verbose) printf("sent LLC is %02x%02x\n", d->data[14], d->data[15]);
+            if (pcap_inject(bridge[index].pcap, d->data, d->len - packetoffset) == -1)
                 perror("Error local network write"); /* Say something, but carry on */
             if (Verbose) printf("packet written\n");
 
         } else {
-                    unsigned char *outbuf = malloc(d->len + 2);
+                    unsigned char* outbuf = malloc(d->len + 2);
                     outbuf[0] = 0x30;
                     outbuf[1] = 0x00;
                     memcpy(outbuf + 2, d->data, d->len);
@@ -668,7 +679,7 @@ void send_packet(int index, struct DATA *d) {
                     /* if(Verbose) printf("sendto'ing data to %s proto %d len %d\n",
                      * inet_ntoa(sa.sin_addr), ntohs(sa.sin_port), d->len - 2); */
                     if (sendto(bridge[index].fd, outbuf, d->len + 2, 0,
-                                         (struct sockaddr *)&sa, sizeof(sa)) == -1)
+                        (struct sockaddr*)&sa, sizeof(sa)) == -1)
                         perror("sendto");
                     free(outbuf);
         }
@@ -690,11 +701,11 @@ void send_packet(int index, struct DATA *d) {
  * The hash stores which bridge link the source address
  * has been seen on.
  */
-void register_source(struct DATA *d) {
+void register_source(struct DATA* d) {
     unsigned short hash;
-    struct HOST *h;
+    struct HOST* h;
 
-    hash = *(unsigned short *)(d->data + 10);
+    hash = *(unsigned short*)(d->data + 10);
     h = hosts[hash];
     while (h) {
         if (memcmp(h->mac, d->data + 6, 6) == 0) {
@@ -722,14 +733,14 @@ void register_source(struct DATA *d) {
  * to all destinations. This is basically an Ethernet switch 
  * emulator. 
  */
-int locate_dest(struct DATA *d) {
+int locate_dest(struct DATA* d) {
     unsigned short hash;
-    struct HOST *h;
+    struct HOST* h;
 
     if (d->data[0] & 1)
         return -1; /* Ethernet multicast */
 
-    hash = *(unsigned short *)(d->data + 4);
+    hash = *(unsigned short*)(d->data + 4);
     h = hosts[hash];
     while (h) {
         if (memcmp(h->mac, d->data, 6) == 0)
@@ -745,7 +756,7 @@ int locate_dest(struct DATA *d) {
 #define CLASSIFY(name, proto) \
     if(is_##name(d)) return proto
 
-pkttyp classify_packet(struct DATA *d) {
+pkttyp classify_packet(struct DATA* d) {
     CLASSIFY(ip, IP);
     CLASSIFY(ip6, IP6);
     CLASSIFY(ipx, IPX);
@@ -763,7 +774,7 @@ pkttyp classify_packet(struct DATA *d) {
     return Unknown;
 }
 
-void dump_nomatch(struct sockaddr_in *r, struct DATA *d) {
+void dump_nomatch(struct sockaddr_in* r, struct DATA* d) {
     if (Verbose) printf("Dumped packet from %s (%d).\n", inet_ntoa(r->sin_addr), ntohs(r->sin_port));
 }
 
@@ -774,7 +785,7 @@ void dump_nomatch(struct sockaddr_in *r, struct DATA *d) {
  * If the type is acceptable from the source, it is
  * forwarded to the correct destination.
  */
-void process_packet(struct DATA *d) {
+void process_packet(struct DATA* d) {
     int dst;
     int i;
 
@@ -834,7 +845,7 @@ void dump_data() {
                      bridge[i].throttlecount, bridge[i].throttle & 255);
     printf("Hash of known destinations:\n");
     for (i = 0; i < HOST_HASH; i++) {
-        struct HOST *h;
+        struct HOST* h;
         h = hosts[i];
         while (h) {
             printf("%02x%02x%02x%02x%02x%02x -> %d", (unsigned char)h->mac[0],
@@ -853,7 +864,7 @@ void dump_data() {
     }
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     struct sockaddr_in sa, rsa;
     int i, hsock, ch;
     fd_set fds;
@@ -948,7 +959,7 @@ int main(int argc, char **argv) {
         sa.sin_addr.s_addr = INADDR_ANY;
     }
 
-    if (bind(sd, (struct sockaddr *)&sa, sizeof(sa)) == -1) {
+    if (bind(sd, (struct sockaddr*)&sa, sizeof(sa)) == -1) {
         perror("bind");
         exit(1);
     }
@@ -987,7 +998,7 @@ int main(int argc, char **argv) {
                     }
                 } else {
                     ilen = sizeof(rsa);
-                    if ((d.len = recvfrom(bridge[i].fd, buf, 1500 + packetoffset, 0, (struct sockaddr *)&rsa, &ilen)) > 0) {
+                    if ((d.len = recvfrom(bridge[i].fd, buf, 1500 + packetoffset, 0, (struct sockaddr*)&rsa, &ilen)) > 0) {
                         if (Verbose) printf("got something! len = %d\n", d.len);
                         d.data = buf + packetoffset;
                         if ((d.source = lookup(&rsa)) >= 0) {
