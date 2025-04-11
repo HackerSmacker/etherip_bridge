@@ -4,7 +4,12 @@ Simple EtherIP/CLAP shim, based on the HECnet DECnet/LAT <--> UDP bridge program
 1. What is this?
 This is a program that listens on an Ethernet device in promiscious mode, checks inbound packets for the DECnet Phase IV, LAT, or both EtherType
 numbers, and sends that data to a remote host using the EtherIP protocol. This, of course, also works in reverse! In addition, HSnet CLAP is 
-supported!
+supported! This protocol is useful if you're trying to build a retro-network WAN, and you're behind NAT/you're running Cisco IOS as your edge
+router and IOS is too stupid to let an arbitrary protocol through NAT. This program is capable of understanding the following protocol formats:
+- Ethernet II, also called DIX Ethernet
+- IEEE 802.2 with LLC
+- IEEE 802.3 without LLC (802.3 Raw)
+- IEEE 802.2 with LLC and SNAP
 
 2. What is EtherIP? What is CLAP?
 EtherIP is IP over Ethernet, with a minimal header. The protocol number is 97, and its header length is 2 bytes. The encapsulation is as follows:
@@ -13,6 +18,7 @@ EtherIP is IP over Ethernet, with a minimal header. The protocol number is 97, a
 [EtherIP header, header contents = X'3000']
 [Ethernet II header, ethertype = DECnet or LAT]
 [DECnet or LAT header]
+
 CLAP (Combined LAN Access Protocol) is UDP-encapsulated EtherIP. This was the original purpose of my modified version of this program, and is a
 multiplexing/combining NAT-aware Ethernet tunnel. The encapsulation is as follows:
 [Ethernet II header, ethertype = IP]
@@ -92,3 +98,38 @@ both support SNA in Ethernet II. This is MUCH easier to match, because it's alwa
 you have too, but, there's another problem! CS/2, specifically, really likes to change SAPs from anything in the 00 to 0F range! Yes, really! This
 makes matching that really hard, so, I recommend you spin up a CS/NT routing node (since it does HPR routing without any issues and will do the
 Ethernet II to Ethernet 802.2 translation for you). 
+
+9. What are the Ethernet frame formats?
+I won't go into too much great detail, but, the Ethernet frame looks like this:
+[xx:xx:xx:xx:xx:xx][xx:xx:xx:xx:xx:xx][xx:xx][rest of packet data]
+  Destination MAC      Source MAC      Type
+The "type" there has a bit of a special meaning. If the type is greater than X'0400', the frame is said to be an Ethernet II (aka DIX) frame. If it's
+less, the frame will be either 802.2, 802.3, or SNAP; the type will become a length value. Immediately following the type word for an EII frame is
+the protocol, but an LLC header (usually) follows that. That looks like this:
+[xx:xx:xx:xx:xx:xx][xx:xx:xx:xx:xx:xx][xx:xx][xx:xx:xx][rest of packet data]
+  Destination MAC      Source MAC      -----  -- -- --
+                                           |   |  |  \__ Control
+                                           |   |  \_____ SSAP
+                                           |   \________ DSAP
+                                           \____________ Length
+The SSAP and DSAP can be interpreted together as a "word" and can be used to classify packets -- look for the RAWTYPE macros to see what some combos
+of SSAP/DSAP can be for various things. The control field is not something I'm going to discuss, but, it's straight X.25 LAPB (LLC is literally 
+X.25 LAPB over Ethernet). Now,` because SAP numbers are very limited (and kinda go in the progression of IP subnet masks in terms of the bit-chomping),
+something called SNAP (SubNetwork Access Protocol) was created. This adds extra fields to the header that ends up looking like this:
+[xx:xx:xx:xx:xx:xx][xx:xx:xx:xx:xx:xx][xx:xx][xx:xx:xx][xx:xx:xx][xx:xx][rest of packet data]
+  Destination MAC      Source MAC      -----  -- -- --  --------  -----
+                                           |   |  |  |         |      |
+                                           |   |  |  |         |      \__ Protocol ID
+                                           |   |  |  |         \_________ Organization Code
+                                           |   |  |  \___________________ Control = 0x03
+                                           |   |  \______________________ SSAP = 0xAA
+                                           |   \_________________________ DSAP = 0xAA
+                                           \_____________________________ Length
+Okay, that's SNAP. There's one more, the infamous Novell IPX 802.3 Raw. This is an 802.3 (which is 802.2 minus the LLC header) with the IPX packet
+checksum (which, funnily enough, for Ethernet, is always X'FFFF') following the length. That looks like this:
+[xx:xx:xx:xx:xx:xx][xx:xx:xx:xx:xx:xx][xx:xx][xx:xx][rest of packet data]
+  Destination MAC      Source MAC      -----  ----- 
+                                           |      | 
+                                           |      \__ Checksum = 0xFFFF
+                                           \_________ Length
+There you go! You now know enough to be dangerous.

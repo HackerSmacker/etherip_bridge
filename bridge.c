@@ -323,9 +323,12 @@ void add_bridge(char* name, char* dst) {
             if (ebuf[0])
                 printf("warning: %s\n", ebuf);
 
-            pcap_set_promisc(bridge[bcnt].pcap, 1);
-            pcap_set_immediate_mode(bridge[bcnt].pcap, 1);
-            pcap_activate(bridge[bcnt].pcap);
+            if(0 != pcap_set_promisc(bridge[bcnt].pcap, 1))
+                printf("Warning: Ethernet interface is NOT operating in promiscious mode. Nothing will work right!\n");
+            if(0 != pcap_set_immediate_mode(bridge[bcnt].pcap, 1))
+                printf("Warning: could not set immediate mode! Strange things may ensue!\n");
+            if(0 != pcap_activate(bridge[bcnt].pcap))
+                printf("Warning: could not activate the PCAP interface. The odds of this working are slim to none!\n");
 
             pgm.bf_len = sizeof(insns) / sizeof(struct bpf_insn);
             pgm.bf_insns = insns;
